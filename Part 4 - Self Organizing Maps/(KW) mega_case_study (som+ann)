@@ -1,0 +1,115 @@
+# Mega Case Study - Make a Hybrid Deep Learning Model
+
+# Part 1 - Identify the Frauds with the Self-Organizing Map
+
+# Importing the libraries
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Importing the dataset
+dataset = pd.read_csv("Credit_Card_Applications.csv")
+X = dataset.iloc[:, :-1].values
+y = dataset.iloc[:, -1].values
+
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler(feature_range = (0, 1))
+X = sc.fit_transform(X)
+
+# Training the SOM
+from minisom import MiniSom
+som = MiniSom(x = 10, y = 10, input_len = 15, sigma = 1.0, learning_rate = 0.5)
+som.random_weights_init(X)
+som.train_random(data = X, num_iteration = 100)
+
+# Visualising the results
+from pylab import bone, pcolor, colorbar, plot, show
+bone()
+pcolor(som.distance_map().T)
+colorbar()
+markers = ['o', 's']
+colors = ['r', 'g']
+for i, x in enumerate(X):
+    w = som.winner(x)
+    plot(w[0]+0.5,
+         w[1]+0.5,
+         markers[y[i]],
+         markeredgecolor = colors[y[i]],
+         markerfacecolor = 'None',
+         markersize = 10, 
+         markeredgewidth = 2)
+show()
+
+# Finding the frauds
+
+distance_map = som.distance_map().T # Generate the DIM of entire map
+treshold = 0.95 # Set a treshold for fraud identification
+rows, columns = np.where(distance_map >= treshold) # Find the location of frauds
+if rows[0]: # If there are fraud(s) identified, create a list of frauds
+    white_coord = list(zip(rows, columns)) 
+mappings = som.win_map(X) # Generate the library of winnings
+
+frauds = [] # To extract entire list of frauds
+for i in range(len(white_coord)):
+    if mappings[white_coord[i]]:
+        frauds.append(mappings[white_coord[i]])
+
+frauds_merged = [] #To remove the comma between the lists, this allows for the conversion of "frauds_merge" to array in 2d instead of 3d
+for i in frauds:
+    frauds_merged += i
+frauds_merged = sc.inverse_transform(np.array(frauds_merged))
+
+# Part 2 - Going from Unsupervised to Supervised Deep Learning
+# Part 1 - Data Preprocessing
+
+# Importing the dataset
+# Add the column of frauds based on the frauds we discovered earlier, this will be y
+dataset = pd.read_csv("Credit_Card_Applications.csv")
+A = dataset.iloc[:, 1:].values
+# Create new list b, depending on whether customer might commit fraud
+
+b = []
+for i in range(len(A)):
+    if dataset.iloc[i, 0] in frauds_merged[:, 0]:
+        b.append(1)
+    else:
+        b.append(0)
+        
+''' ALTERNATIVE SOLUTION TO GENERATING b
+potential_cheaters = frauds_merged[:, 0]
+is_fraud = dataset['CustomerID'].isin(potential_cheaters).astype(int).values
+'''
+
+# Feature Scaling
+from sklearn.preprocessing import StandardScaler
+sc = StandardScaler()
+A = sc.fit_transform(A)
+
+# Part 2 - Now let's make the ANN!
+
+# Importing the Keras libraries and packages
+from keras.models import Sequential
+from keras.layers import Dense
+
+# Initialising the ANN
+classifier = Sequential()
+
+# Adding the input layer and the first hidden layer
+classifier.add(Dense(units = 2, kernel_initializer = 'uniform', activation = 'relu', input_dim = 15))
+
+# Adding the output layer
+classifier.add(Dense(units = 1, kernel_initializer = 'uniform', activation = 'sigmoid'))
+
+# Compiling the ANN
+classifier.compile(optimizer = 'adam', loss = 'binary_crossentropy', metrics = ['accuracy'])
+
+# Fitting the ANN to the Training set
+classifier.fit(A, b, batch_size = 1, epochs = 2)
+
+# Part 3 - Making predictions and evaluating the model
+
+# Predicting the probabilities of frauds
+y_pred = classifier.predict(A)
+y_pred = np.concatenate((dataset.iloc[:, 0:1].values, y_pred), axis = 1)
+y_pred = y_pred[y_pred[:, 1].argsort()]
