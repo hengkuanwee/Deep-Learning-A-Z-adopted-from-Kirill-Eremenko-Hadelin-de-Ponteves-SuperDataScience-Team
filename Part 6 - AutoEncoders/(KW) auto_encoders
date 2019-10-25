@@ -1,0 +1,97 @@
+# Importing the libraries
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.optim as optim
+import torch.utils.data
+from torch.autograd import Variable
+
+# Importing the dataset
+movies = pd.read_csv('ml-1m/movies.dat', sep = '::', header = None, engine = 'python', encoding = 'latin-1')
+users = pd.read_csv('ml-1m/users.dat', sep = '::', header = None, engine = 'python', encoding = 'latin-1')
+ratings = pd.read_csv('ml-1m/ratings.dat', sep = '::', header = None, engine = 'python', encoding = 'latin-1')
+
+# Preparing the training set and the test set
+training_set = pd.read_csv('ml-100k/u1.base', delimiter = '\t') # 'delminiter' same as 'sep' above, '\t' means seperated by tab
+training_set = np.array(training_set, dtype =  'int64')
+test_set = pd.read_csv('ml-100k/u1.test', delimiter = '\t')
+test_set = np.array(test_set, dtype = 'int64')
+
+# Getting the number of users and movies
+nb_users = int(max(max(training_set[:, 0]), max(test_set[:, 0])))
+nb_movies = int(max(max(training_set[:, 1]), max(test_set[:, 1])))
+    
+# Converting the data into an array with users in lines and movies in columns
+def convert(data):
+    new_data = [] # list of lists used here (instead of np arrays) as we are converting them into torch tensors later
+    for id_users in range(1, nb_users+1): # loop through all users
+        id_movies = data[:, 1][data[:, 0] == id_users] # to extract id_movies based on id_users
+        id_ratings = data[:, 2][data[:, 0] == id_users] # to extract id_ratings based on id_users
+        ratings = np.zeros(nb_movies) # create numpy array of zeros (of ratings) corresponding to nb_movies
+        ratings[id_movies-1] = id_ratings # replace list of zeros with id_ratings, if the users gave that id_movie a rating
+        new_data.append(list(ratings)) #convert the ratings to list, and append it to list
+    return new_data
+training_set = convert(training_set)
+test_set = convert(test_set)
+        
+# Converting the data into Torch tensors
+training_set = torch.FloatTensor(training_set)
+test_set = torch.FloatTensor(test_set)
+
+# Creating the architecture of the Neural Network
+class SAE(nn.Module): # to inherit from the parent class 'nn.Module'
+    def __init__(self, ):
+        super(SAE, self).__init__() # to get the inherited methods from the Module class (i.e. classes and methods from the nn.Module)
+        self.fc1 = nn.Linear(nb_movies, 20) # creating first hidden layer with 20 features
+        self.fc2 = nn.Linear(20, 10) # creating the second hidden layer with 10 features
+        self.fc3 = nn.Linear(10, 20) # creating the third hidden layer with 20 outputs
+        self.fc4 = nn.Linear(20, nb_movies) # creating the forth hidden layer with nb_movies outputs
+        self.activation = nn.Sigmoid()
+    def forward(self, x): # x is the input vector
+        x = self.activation(self.fc1(x)) # to activate the neurons of the first fully connected layer
+        x = self.activation(self.fc2(x))
+        x = self.activation(self.fc3(x)) 
+        x = self.fc4(x) #last layer, do not need activation function
+        return x
+sae = SAE()
+criterion = nn.MSELoss() # criterion for the loss function
+optimizer = optim.RMSprop(sae.parameters(), lr = 0.01, weight_decay = 0.5) # decay is used to reduce the learning rate after every few epoch inorder to regulate the convergence
+
+# Training the SAE
+nb_epoch = 200
+for epoch in range(1, nb_epoch + 1):
+    train_loss = 0
+    s = 0. # counter, increment after each epoch, for nomalizing the train loss (train loss/s)
+    for id_user in range(nb_users): # indexes of training set start from 0
+        input = Variable(training_set[id_user]).unsqueeze(0) # unsqueeze to create a batch of input vectors (i.e. increaes the dimension)
+        target = input.clone() # to make target = input initially
+        if torch.sum(target.data > 0) > 0: # if target contains at least 1 ratings that is not zero
+            output = sae(input) # sae.forward(input)??
+            target.require_grad = False # ensure we don't compute the gradient w.r.t to target (this will save on computations)
+            output[target == 0] = 0 # set output vectors to zero, if the correspnding target vectors is zero (this is done to save on computations as these values will not count towards computations of the error, even if they are not equal to zero)
+            loss = criterion(output , target)
+            mean_corrector = nb_movies/float(torch.sum(target.data> 0) + 1e-10) # '+ 1e-10' to make sure denominator is non-nil (to prevent infinite computations) by adding a really small numer that does not create any bias
+            loss.backward() # will tell the direction (i.e. whether we need to increase/decrease the weights based on the loss)
+            train_loss += np.sqrt(loss.item()*mean_corrector) # to update training loss
+            s += 1.
+            optimizer.step() # will tell the intensity (i.e. the amount to adjust for the weight)
+    print('epoch: ' + str(epoch) + ' loss: ' + str(train_loss/s))
+
+
+# Testing the SAE
+test_loss = 0
+s = 0. # counter, increment after each epoch, for nomalizing the train loss (train loss/s)
+for id_user in range(nb_users): # indexes of training set start from 0
+    input = Variable(training_set[id_user]).unsqueeze(0) # unsqueeze to create a batch of input vectors (i.e. increaes the dimension)
+    target = Variable(test_set[id_user]).unsqueeze(0)
+    if torch.sum(target.data > 0) > 0: # if target contains at least 1 ratings that is not zero
+        output = sae(input) 
+        target.require_grad = False # ensure we don't compute the gradient w.r.t to target (this will save on computations)
+        output[target == 0] = 0 # set output vectors to zero, if the correspnding target vectors is zero (this is done to save on computations as these values will not count towards computations of the error, even if they are not equal to zero)
+        loss = criterion(output , target)
+        mean_corrector = nb_movies/float(torch.sum(target.data> 0) + 1e-10) # '+ 1e-10' to make sure denominator is non-nil (to prevent infinite computations) by adding a really small numer that does not create any bias
+        test_loss += np.sqrt(loss.item()*mean_corrector) # to update training loss
+        s += 1.
+print('loss: ' + str(test_loss/s))
